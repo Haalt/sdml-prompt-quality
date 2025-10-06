@@ -1,0 +1,7 @@
+*.pt
+*.onnx
+*.json
+__pycache__/
+*.egg-info/
+*.bak
+*.data

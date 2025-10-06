@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sdml-prompt-quality"
+version = "0.3.0"
+description = "SDML Prompt Quality Regression Model (PyTorch V3)"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Haalt" }]
+license = { text = "Proprietary" }
+keywords = ["pytorch", "nlp", "regression", "onnx", "tokenizer", "ml"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: Other/Proprietary License",
+  "Operating System :: OS Independent",
+]
+
+dependencies = [
+  "torch>=2.6.0",
+  "numpy>=1.24.0",
+  "scikit-learn>=1.3.0",
+  "pandas>=2.0.0",
+  "matplotlib>=3.7.0",
+  "seaborn>=0.12.0",
+  "tensorboard>=2.14.0",
+  "tqdm>=4.65.0",
+  "pyyaml>=6.0",
+  "jsonschema>=4.17.0",
+  "transformers>=4.30.0",
+  "tokenizers>=0.13.0",
+]
+
+[project.optional-dependencies]
+onnx = [
+  "onnx>=1.15.0",
+  "onnxruntime>=1.16.0",
+  "onnxconverter-common>=1.13.0",
+]
+dev = [
+  "pytest>=7.4.0",
+  "pytest-cov>=4.1.0",
+  "black>=23.7.0",
+  "flake8>=6.0.0",
+  "mypy>=1.5.0",
+  "pre-commit>=3.3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Haalt/sdml-prompt-quality"
+
+[project.scripts]
+sdpq = "sdml_prompt_quality.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+strict_equality = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=sdml_prompt_quality --cov-report=term-missing --cov-report=html"
