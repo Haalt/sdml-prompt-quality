@@ -6,9 +6,12 @@ import numpy as np
 import re
 
 
-def parseTag(tag):
+def parseTag(tag, is_xl):
     try:
-        return f"lora {tag.split(':')[1]}:{tag.split(':')[2][:-1]}" if "<" in tag else tag.replace("(", "").replace(")", "")
+        if is_xl:
+            return f"lora {tag.split(':')[1]}:{tag.split(':')[2][:-1]}" if "<lora" in tag else tag
+        else:
+            return f"lora {tag.split(':')[1]}:{tag.split(':')[2][:-1]}" if "<" in tag else tag.replace("(", "").replace(")", "")
     except Exception as e:
         return tag.split(":")[1] if "<" in tag else tag
 
@@ -24,7 +27,7 @@ def load_sqlite(database_path, map={}):
         SUM(CASE WHEN i.status = 'saved' THEN 1 ELSE 0 END) as saved_count,
         SUM(CASE WHEN i.status = 'deleted' OR i.status = 'binned' THEN 1 ELSE 0 END) as deleted_count
     FROM metadata m
-    LEFT JOIN images i ON m.metadata_id = i.metadata_id
+    LEFT JOIN images i ON i.metadata_id = i.metadata_id
     GROUP BY m.metadata_id
     """
 
@@ -60,11 +63,12 @@ def load_sqlite_logits(database_path, map={}):
     #     SUM(CASE WHEN i.status = 'saved' THEN 1 ELSE 0 END) as saved_count,
     #     SUM(CASE WHEN i.status = 'deleted' OR i.status = 'binned' THEN 1 ELSE 0 END) as deleted_count
     # FROM metadata m
-    # LEFT JOIN images i ON m.metadata_id = i.metadata_id
+    # LEFT JOIN images i ON i.metadata_id = i.metadata_id
     # WHERE i.generation_info IS NOT NULL
     # GROUP BY m.metadata_id, i.generation_info
     # """
-    query = """
+
+    query = f"""
     SELECT
         m.metadata_id,
         m.metadata_content,
@@ -72,7 +76,7 @@ def load_sqlite_logits(database_path, map={}):
         SUM(CASE WHEN i.status = 'saved' THEN 1 ELSE 0 END) as saved_count,
         SUM(CASE WHEN i.status = 'deleted' OR i.status = 'binned' THEN 1 ELSE 0 END) as deleted_count
     FROM metadata m
-    LEFT JOIN images i ON m.metadata_id = i.metadata_id
+    LEFT JOIN images i ON i.metadata_id = i.metadata_id
     GROUP BY m.metadata_id
     """
 
@@ -165,10 +169,16 @@ def load_dataset_logits():
     return (dataset_input, dataset_output)
 
 
-def load_sqlite_model_scores(database_path, map={}, include_null=False):
+def load_sqlite_model_scores(database_path, map={}, include_null=False, is_xl=False):
     """Load dataset with model scores from database"""
     conn = sqlite3.connect(database_path)
     cursor = conn.cursor()
+
+    if is_xl:
+        MODEL_NAME = 'sdxl'
+    else:
+        MODEL_NAME = 'sd1.5'
+
 
     if include_null:
         # Include all images, using original labels for null scores
@@ -180,23 +190,20 @@ def load_sqlite_model_scores(database_path, map={}, include_null=False):
         #     i.status,
         #     i.model_score
         # FROM metadata m
-        # LEFT JOIN images i ON m.metadata_id = i.metadata_id
+        # LEFT JOIN images i ON i.metadata_id = i.metadata_id
         # """
         pass
     else:
         # Only include images with model scores
-        query = """
+        query = f"""
         SELECT
             m.metadata_content,
             i.generation_info,
-            AVG(i.model_score)          AS mean_score,
-            COUNT(*)                    AS count
+            i.model_score
         FROM metadata AS m
         JOIN images   AS i ON i.metadata_id = m.metadata_id
-        WHERE i.model_score IS NOT NULL
-        GROUP BY m.metadata_id;
+        WHERE i.model_score IS NOT NULL AND i.generation_info LIKE '%Model: {MODEL_NAME}%'
         """
-        # GROUP BY m.metadata_id, i.generation_info;
 
     cursor.execute(query)
     records = cursor.fetchall()
@@ -207,13 +214,13 @@ def load_sqlite_model_scores(database_path, map={}, include_null=False):
     upscaler_pattern = r"Hires upscaler: (.*?(?=,))(?=,)"
     upscaler_steps_pattern = r"Hires steps: ([0-9]+)(?=,)"
     denoising_strength_pattern = r"Denoising strength: ([0|1]\.[0-9]+)(?=,)"
+    loras_pattern = r'Lora hashes: "([^"]*)"'
 
-    # group by prompt and CFG scale
+    # Group by prompt + CFG + generation settings to collect raw scores.
     grouped_scores = {}
 
     for record in records:
-        # metadata_id, metadata_content, generation_info, status, model_score = record
-        metadata_content, generation_info, mean_score, count = record
+        metadata_content, generation_info, model_score = record
 
         if generation_info is None or generation_info == '':
             continue
@@ -224,6 +231,9 @@ def load_sqlite_model_scores(database_path, map={}, include_null=False):
             1)) if cfg_match else 7.0  # default CFG scale
 
         try:
+            loras_match = re.search(loras_pattern, generation_info)
+            loras = loras_match.group(1) if loras_match else ""
+            loras = ["lora " + lora.split(":")[0].strip() for lora in loras.split(",") if len(loras) > 0]
 
             sampler_match = re.search(sampler_pattern, generation_info)
             sampler = sampler_match.group(1)
@@ -248,30 +258,26 @@ def load_sqlite_model_scores(database_path, map={}, include_null=False):
                 else 0.0
             )
         except:
-            print(generation_info)
+            # print(generation_info)
             continue
 
         tags = "".join(metadata_content.split("\n")[:-1]).split(",")
-        tags = [parseTag(tag.strip()) for tag in tags]
+        tags = [parseTag(tag.strip(), is_xl) for tag in tags]
         key = ",".join(tags)
 
         # Create a unique key that includes CFG scale
         key_with_cfg = f"{key}||cfg:{cfg_scale}"
 
-        # Determine score
-        if mean_score is not None:
-            score = mean_score
-        # elif include_null:
-        #     # Fallback to original label for null scores
-        #     score = 1.0 if status == 'saved' else 0.0
-        else:
-            # Skip if no model score and not including null
+        if model_score is None:
             continue
+
+        score = float(model_score)
 
         # Collect scores for this prompt+cfg combination
         if key_with_cfg not in grouped_scores:
-            map[key_with_cfg] = {
-                "mean_score": score,
+            grouped_scores[key_with_cfg] = {
+                "scores": [score],
+                "loras": loras,
                 "sequence": key,
                 "cfg_scale": cfg_scale,
                 "sampler": sampler,
@@ -280,56 +286,111 @@ def load_sqlite_model_scores(database_path, map={}, include_null=False):
                 "upscaler_steps": upscaler_steps,
                 "denoising_strength": denoising_strength,
             }
-        # grouped_scores[key_with_cfg]["scores"].append(score)
+        else:
+            grouped_scores[key_with_cfg]["scores"].append(score)
 
-    # Calculate mean scores for each group
-    # for key_with_cfg, data in grouped_scores.items():
-    #     scores = data["scores"]
-    #     mean_score = sum(scores) / len(scores) if scores else 0.0
-
-    #     map[key_with_cfg] = {
-    #         "mean_score": mean_score,
-    #         "count": len(scores),
-    #         "sequence": data["sequence"],
-    #         "cfg_scale": data["cfg_scale"]
-    #     }
+    for key_with_cfg, data in grouped_scores.items():
+        scores = np.asarray(data["scores"], dtype=np.float32)
+        if scores.size == 0:
+            continue
+        map[key_with_cfg] = {
+            "mean_score": float(np.mean(scores)),
+            "count": int(scores.size),
+            "raw_scores": data["scores"],
+            "loras": data["loras"],
+            "sequence": data["sequence"],
+            "cfg_scale": data["cfg_scale"],
+            "sampler": data["sampler"],
+            "steps": data["steps"],
+            "upscaler": data["upscaler"],
+            "upscaler_steps": data["upscaler_steps"],
+            "denoising_strength": data["denoising_strength"],
+        }
 
     conn.close()
     return map
 
 
-def load_dataset_model_scores(include_null=False):
+def load_dataset_model_scores(
+    include_null=False,
+    is_xl=False,
+    combine=False,
+    normalize=True,
+):
     """Load dataset with model scores instead of binary labels"""
-    map = {}
 
-    try:
-        load_sqlite_model_scores(
-            "./dataset/sd.db", map, include_null=include_null)
-    except sqlite3.OperationalError:
-        load_sqlite_model_scores(
-            "../dataset/sd.db", map, include_null=include_null)
+    def _get_data(is_xl_flag):
+        map_data = {}
+        try:
+            load_sqlite_model_scores(
+                "./dataset/sd.db", map_data, include_null=include_null, is_xl=is_xl_flag)
+        except sqlite3.OperationalError:
+            load_sqlite_model_scores(
+                "../dataset/sd.db", map_data, include_null=include_null, is_xl=is_xl_flag)
 
-    dataset_input = []
-    dataset_output = []
+        inputs = []
+        scores = []
 
-    for key, value in map.items():
-        if len(value["sequence"].split(",")) <= 82:
-            # Create input dict with all features
-            dataset_input.append(
-                {
+        for key, value in map_data.items():
+            if len(value["sequence"].split(",")) <= 82:
+                inputs.append({
                     "sequence": value["sequence"],
+                    "loras": value["loras"],
                     "cfg_scale": value["cfg_scale"],
                     "sampler": value["sampler"],
                     "steps": value["steps"],
                     "upscaler": value["upscaler"],
                     "upscaler_steps": value["upscaler_steps"],
                     "denoising_strength": value["denoising_strength"],
-                }
-            )
-            dataset_output.append(value["mean_score"])
+                    "model_id": 1 if is_xl_flag else 0
+                })
+                scores.append(value["mean_score"])
 
-    print(len(dataset_input), len(dataset_output))
+        return inputs, scores
 
+    if combine:
+        # Load both datasets
+        print("Loading SD1.5 dataset...")
+        inputs_sd15, scores_sd15 = _get_data(False)
+        print(f"Loaded {len(scores_sd15)} SD1.5 samples")
+
+        print("Loading SDXL dataset...")
+        inputs_xl, scores_xl = _get_data(True)
+        print(f"Loaded {len(scores_xl)} SDXL samples")
+
+        if normalize:
+            print("Normalizing scores separately (Z-score)...")
+            s15 = np.array(scores_sd15, dtype=np.float32)
+            if len(s15) > 0:
+                mean_15, std_15 = np.mean(s15), np.std(s15)
+                print(f"SD1.5: mean={mean_15:.4f}, std={std_15:.4f}")
+            s15_norm = (s15 - mean_15) / (std_15 + 1e-8)
+            scores_sd15 = s15_norm.tolist()
+
+            sxl = np.array(scores_xl, dtype=np.float32)
+            if len(sxl) > 0:
+                mean_xl, std_xl = np.mean(sxl), np.std(sxl)
+                print(f"SDXL: mean={mean_xl:.4f}, std={std_xl:.4f}")
+            sxl_norm = (sxl - mean_xl) / (std_xl + 1e-8)
+            scores_xl = sxl_norm.tolist()
+
+        dataset_input = inputs_sd15 + inputs_xl
+        dataset_output = scores_sd15 + scores_xl
+
+    else:
+        # Load single dataset
+        dataset_input, dataset_output = _get_data(is_xl)
+
+        if normalize:
+            print(f"Normalizing scores (is_xl={is_xl})...")
+            s = np.array(dataset_output, dtype=np.float32)
+            if len(s) > 0:
+                mean_val, std_val = np.mean(s), np.std(s)
+                print(f"Stats: mean={mean_val:.4f}, std={std_val:.4f}")
+            s_norm = (s - mean_val) / (std_val + 1e-8)
+            dataset_output = s_norm.tolist()
+
+    print(f"Total samples: {len(dataset_input)}")
     return (dataset_input, dataset_output)
 
 
@@ -343,7 +404,6 @@ def split_dataset(dataset_input, dataset_output):
                 index = i
         return index
 
-    # threshold = 2
     y_series = pd.Series(dataset_output)
 
     # class_counts = y_series.value_counts()
@@ -352,13 +412,21 @@ def split_dataset(dataset_input, dataset_output):
 
     y_binned = pd.qcut(y_series, q=10, labels=False, duplicates="drop")
 
-    x_train, x_val, y_train, y_val = train_test_split(
-        dataset_input, y_series, test_size=0.2, random_state=42, stratify=y_binned
+    x_train, x_val, y_train_idx, y_val_idx = train_test_split(
+        np.asarray(dataset_input),
+        np.arange(len(dataset_input)),
+        test_size=0.2,
+        random_state=42,
+        stratify=y_binned,
     )
 
+    y_np = np.asarray(dataset_output)
+    y_train = y_np[y_train_idx]
+    y_val = y_np[y_val_idx]
+
     x_train, x_val, y_train, y_val = (
-        np.array(x_train),
-        np.array(x_val),
+        np.array(x_train, dtype=object),
+        np.array(x_val, dtype=object),
         np.array(y_train),
         np.array(y_val),
     )

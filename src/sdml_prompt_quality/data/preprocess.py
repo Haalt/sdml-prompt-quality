@@ -94,6 +94,10 @@ def process_sequences(_sequences, tokenizer):
     upscale_steps = []
     denoise_strengths = []
 
+    STEP_BUCKET_WIDTH = 5
+
+    labels = []
+
     for _seq in _sequences:
         seq = _seq["sequence"]
         w, s, l, s_m = ([], [], [], [])
@@ -119,12 +123,17 @@ def process_sequences(_sequences, tokenizer):
         steps_raw.append(_seq["steps"])
         samplers.append(tokenizer.sampler_to_token(_seq["sampler"]))
         steps_log.append(math.log1p(_seq["steps"]) / math.log1p(60))
-        steps_bucket.append(_seq["steps"] // 60)
+        steps_bucket.append(_seq["steps"] // STEP_BUCKET_WIDTH)
         upscale_steps.append(_seq["upscaler_steps"] / 25.0)
 
         denoise_strengths.append(_seq["denoising_strength"])
 
         upscalers.append(tokenizer.upscaler_to_token(_seq["upscaler"]))
+        # keep label aligned with kept sample
+        if "label" in _seq:
+            labels.append(_seq["label"])
+        else:
+            raise Exception("no Label")
 
     up_has = [1 if u > 0 else 0 for u in upscalers]
 
@@ -143,6 +152,7 @@ def process_sequences(_sequences, tokenizer):
         upscale_steps,
         denoise_strengths,
         up_has,
+        labels
     )
 
 
@@ -206,9 +216,13 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
     lora_vocab_size = len(tokenizer.lora_index)
     print(vocab_size)
 
-    sequences = tokenizer.texts_to_sequences(x_train)
-    sequences_val = tokenizer.texts_to_sequences(x_val)
-    sequences_test = tokenizer.texts_to_sequences(x_test)
+    # attach labels so downstream drops preserve alignment
+    x_train_with_labels = [{**x, "label": y} for x, y in zip(x_train, y_train)]
+    x_val_with_labels = [{**x, "label": y} for x, y in zip(x_val, y_val)]
+
+    sequences = tokenizer.texts_to_sequences(x_train_with_labels)
+    sequences_val = tokenizer.texts_to_sequences(x_val_with_labels)
+    # sequences_test = tokenizer.texts_to_sequences(x_test)
 
     (
         sequences,
@@ -225,6 +239,7 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
         upscale_steps,
         denoise_strengths,
         up_has,
+        y_train,
     ) = process_sequences(sequences, tokenizer)
 
     (
@@ -242,28 +257,29 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
         upscale_steps_val,
         denoise_strengths_val,
         up_has_val,
+        y_val,
     ) = process_sequences(sequences_val, tokenizer)
 
-    (
-        sequences_test,
-        sequences_masks_test,
-        loras_test,
-        weights_test,
-        cfg_scales_test,
-        n_loras_test,
-        samplers_test,
-        steps_raw_test,
-        steps_log_test,
-        steps_bucket_test,
-        upscalers_test,
-        upscale_steps_test,
-        denoise_strengths_test,
-        up_has_test,
-    ) = process_sequences(sequences_test, tokenizer)
+    # (
+    #     sequences_test,
+    #     sequences_masks_test,
+    #     loras_test,
+    #     weights_test,
+    #     cfg_scales_test,
+    #     n_loras_test,
+    #     samplers_test,
+    #     steps_raw_test,
+    #     steps_log_test,
+    #     steps_bucket_test,
+    #     upscalers_test,
+    #     upscale_steps_test,
+    #     denoise_strengths_test,
+    #     up_has_test,
+    # ) = process_sequences(sequences_test, tokenizer)
 
     max_loras = 0
     nb_loras = set()
-    for l in loras + loras_val + loras_test:
+    for l in loras + loras_val:  # + loras_test:
         if len(l) > max_loras:
             max_loras = len(l)
         for _l in l:
@@ -280,17 +296,17 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
     print("upscaler vocab size:", upscaler_vocab_size)
 
     weight_set = set()
-    for seq in weights + weights_val + weights_test:
+    for seq in weights + weights_val:  # + weights_test:
         for weight in seq:
             weight_set.add(int(weight * 100.0))
 
     max_length = 0
-    for s in sequences + sequences_val + sequences_test:
+    for s in sequences + sequences_val:  # + sequences_test:
         if len(s) > max_length:
             max_length = len(s)
 
     max_cfg_scale = 0.0
-    for cfg in cfg_scales + cfg_scales_test + cfg_scales_val:
+    for cfg in cfg_scales + cfg_scales_val:  # + cfg_scales_test:
         if cfg > max_cfg_scale:
             max_cfg_scale = cfg
 
@@ -328,19 +344,19 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
         loras_val, maxlen=max_loras, padding="post", truncating="post"
     )
 
-    padded_sequences_token_test = pad_sequences(
-        sequences_test, maxlen=max_length, padding="post", truncating="post"
-    )
-    padded_sequences_weight_test = pad_sequences(
-        weights_test,
-        maxlen=max_loras,
-        padding="post",
-        truncating="post",
-        dtype="float32",
-    )
-    padded_sequences_loras_test = pad_sequences(
-        loras_test, maxlen=max_loras, padding="post", truncating="post"
-    )
+    # padded_sequences_token_test = pad_sequences(
+    #     sequences_test, maxlen=max_length, padding="post", truncating="post"
+    # )
+    # padded_sequences_weight_test = pad_sequences(
+    #     weights_test,
+    #     maxlen=max_loras,
+    #     padding="post",
+    #     truncating="post",
+    #     dtype="float32",
+    # )
+    # padded_sequences_loras_test = pad_sequences(
+    #     loras_test, maxlen=max_loras, padding="post", truncating="post"
+    # )
 
     n_loras = [n / max_loras for n in n_loras]
     n_loras_val = [n / max_loras for n in n_loras_val]
