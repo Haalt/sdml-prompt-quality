@@ -49,5 +49,9 @@ class PromptDataset(Dataset):
             "model_id": torch.as_tensor([self.samples[13][idx]], dtype=torch.long),
             # Supports both scalar targets (shape [1]) and quantile targets (shape [2]).
             "target": target,
+            # Weight is 1.0 for SD1.5 (model_id=0) and higher for SDXL (model_id=1)
+            # this factor is tunable. since ratio is ~10:1, can try 5.0 or 10.0 to balance.
+            # "weight": torch.as_tensor([5.0 if self.samples[13][idx] == 1 else 1.0], dtype=torch.float32)
+            "weight": torch.as_tensor([9.45 if self.samples[13][idx] == 1 else 1.0], dtype=torch.float32)
         }
         return item
