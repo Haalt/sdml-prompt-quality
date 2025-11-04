@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 
 from .models.v3 import load_model
-# from .models.v4 import load_model
 
 
 def make_dummy(batch=1, T=77, L=7, device="cuda", float_dtype=torch.float32):
@@ -32,11 +31,13 @@ def make_dummy(batch=1, T=77, L=7, device="cuda", float_dtype=torch.float32):
     up_steps = z_float(batch, 1)
     denoise = z_float(batch, 1)
 
+    model_id = z_long(batch, 1)
+
     return (tokens, token_mask,
             lora_ids, lora_w,
             cfg, n_loras,
             sampler_id, steps_log, steps_bucket,
-            upscaler_id, up_has, up_steps, denoise)
+            upscaler_id, up_has, up_steps, denoise, model_id)
 
 
 def export_onnx_fp32(out_path, model_path, device="cuda"):
@@ -50,12 +51,13 @@ def export_onnx_fp32(out_path, model_path, device="cuda"):
         "lora_ids", "lora_w",
         "cfg", "n_loras",
         "sampler_id", "steps_log", "steps_bucket",
-        "upscaler_id", "up_has", "up_steps", "denoise"
+        "upscaler_id", "up_has", "up_steps", "denoise", "model_id"
     ]
     output_names = ["output"]
 
     # Use legacy dynamic_axes when dynamo=False
     dyn_axes = {n: {0: "batch"} for n in input_names}
+    # dyn_axes["token_mask"] = {1: "seq_len"}
     # dyn_axes["tokens"][1] = "seq_len"
     # dyn_axes["token_mask"][1] = "seq_len"
     # dyn_axes["lora_ids"][1] = "n_loras"
@@ -265,7 +267,7 @@ def convert_v3(out_path, model_path, device="cuda", fp16=False, keep_io_types=Fa
 
     if keep_io_types:
         fp16_path = keep_selected_inputs_fp32(fp16_path, None, input_names=[
-            "cfg", "n_loras", "steps_log", "up_has", "up_steps", "denoise", "token_mask", "lora_w"])
+            "cfg", "n_loras", "steps_log", "up_has", "up_steps", "denoise", "token_mask", "lora_w", "model_id"])
 
     fp16_path = fix_cast_attr_to_match_output(fp16_path)
 

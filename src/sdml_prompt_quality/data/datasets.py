@@ -31,6 +31,7 @@ class PromptDataset(Dataset):
         return self.samples[0].shape[0]
 
     def __getitem__(self, idx):
+        target = torch.as_tensor(self.samples[14][idx], dtype=torch.float32).reshape(-1)
         item = {
             "tokens": torch.as_tensor(self.samples[0][idx], dtype=torch.long),
             "token_mask": torch.as_tensor(self.samples[1][idx], dtype=torch.float32),
@@ -45,6 +46,8 @@ class PromptDataset(Dataset):
             "up_has": torch.as_tensor([self.samples[10][idx]], dtype=torch.float32),
             "up_steps": torch.as_tensor([self.samples[11][idx]], dtype=torch.float32),
             "denoise": torch.as_tensor([self.samples[12][idx]], dtype=torch.float32),
-            "target": torch.as_tensor([self.samples[13][idx]], dtype=torch.float32),
+            "model_id": torch.as_tensor([self.samples[13][idx]], dtype=torch.long),
+            # Supports both scalar targets (shape [1]) and quantile targets (shape [2]).
+            "target": target,
         }
         return item

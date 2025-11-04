@@ -80,6 +80,11 @@ def pad_sequences(
 
 
 def process_sequences(_sequences, tokenizer):
+    STEP_BUCKET_WIDTH = 5
+
+    labels = []
+    model_ids = []
+
     loras = []
     sequences = []
     sequences_masks = []
@@ -93,10 +98,6 @@ def process_sequences(_sequences, tokenizer):
     upscalers = []
     upscale_steps = []
     denoise_strengths = []
-
-    STEP_BUCKET_WIDTH = 5
-
-    labels = []
 
     for _seq in _sequences:
         seq = _seq["sequence"]
@@ -129,6 +130,7 @@ def process_sequences(_sequences, tokenizer):
         denoise_strengths.append(_seq["denoising_strength"])
 
         upscalers.append(tokenizer.upscaler_to_token(_seq["upscaler"]))
+        model_ids.append(_seq["model_id"])
         # keep label aligned with kept sample
         if "label" in _seq:
             labels.append(_seq["label"])
@@ -151,6 +153,7 @@ def process_sequences(_sequences, tokenizer):
         upscalers,
         upscale_steps,
         denoise_strengths,
+        model_ids,
         up_has,
         labels
     )
@@ -238,6 +241,7 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
         upscalers,
         upscale_steps,
         denoise_strengths,
+        model_ids,
         up_has,
         y_train,
     ) = process_sequences(sequences, tokenizer)
@@ -256,6 +260,7 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
         upscalers_val,
         upscale_steps_val,
         denoise_strengths_val,
+        model_ids_val,
         up_has_val,
         y_val,
     ) = process_sequences(sequences_val, tokenizer)
@@ -377,6 +382,7 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
         up_has,
         upscale_steps,
         denoise_strengths,
+        model_ids,
         y_train,
     ]
     val_samples = [
@@ -393,6 +399,7 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
         up_has_val,
         upscale_steps_val,
         denoise_strengths_val,
+        model_ids_val,
         y_val,
     ]
 
