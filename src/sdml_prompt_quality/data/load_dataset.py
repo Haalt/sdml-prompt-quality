@@ -27,7 +27,7 @@ def load_sqlite(database_path, map={}):
         SUM(CASE WHEN i.status = 'saved' THEN 1 ELSE 0 END) as saved_count,
         SUM(CASE WHEN i.status = 'deleted' OR i.status = 'binned' THEN 1 ELSE 0 END) as deleted_count
     FROM metadata m
-    LEFT JOIN images i ON i.metadata_id = i.metadata_id
+    LEFT JOIN images i ON m.metadata_id = i.metadata_id
     GROUP BY m.metadata_id
     """
 
@@ -63,10 +63,11 @@ def load_sqlite_logits(database_path, map={}):
     #     SUM(CASE WHEN i.status = 'saved' THEN 1 ELSE 0 END) as saved_count,
     #     SUM(CASE WHEN i.status = 'deleted' OR i.status = 'binned' THEN 1 ELSE 0 END) as deleted_count
     # FROM metadata m
-    # LEFT JOIN images i ON i.metadata_id = i.metadata_id
+    # LEFT JOIN images i ON m.metadata_id = i.metadata_id
     # WHERE i.generation_info IS NOT NULL
     # GROUP BY m.metadata_id, i.generation_info
     # """
+
 
     query = f"""
     SELECT
@@ -76,7 +77,7 @@ def load_sqlite_logits(database_path, map={}):
         SUM(CASE WHEN i.status = 'saved' THEN 1 ELSE 0 END) as saved_count,
         SUM(CASE WHEN i.status = 'deleted' OR i.status = 'binned' THEN 1 ELSE 0 END) as deleted_count
     FROM metadata m
-    LEFT JOIN images i ON i.metadata_id = i.metadata_id
+    LEFT JOIN images i ON m.metadata_id = i.metadata_id
     GROUP BY m.metadata_id
     """
 
@@ -190,7 +191,7 @@ def load_sqlite_model_scores(database_path, map={}, include_null=False, is_xl=Fa
         #     i.status,
         #     i.model_score
         # FROM metadata m
-        # LEFT JOIN images i ON i.metadata_id = i.metadata_id
+        # LEFT JOIN images i ON m.metadata_id = i.metadata_id
         # """
         pass
     else:
@@ -205,6 +206,7 @@ def load_sqlite_model_scores(database_path, map={}, include_null=False, is_xl=Fa
         WHERE i.model_score IS NOT NULL AND i.generation_info LIKE '%Model: {MODEL_NAME}%'
         """
 
+
     cursor.execute(query)
     records = cursor.fetchall()
 
@@ -216,7 +218,7 @@ def load_sqlite_model_scores(database_path, map={}, include_null=False, is_xl=Fa
     denoising_strength_pattern = r"Denoising strength: ([0|1]\.[0-9]+)(?=,)"
     loras_pattern = r'Lora hashes: "([^"]*)"'
 
-    # Group by prompt + CFG + generation settings to collect raw scores.
+    # Group by prompt + CFG + generation settings to build empirical quantiles.
     grouped_scores = {}
 
     for record in records:
@@ -295,6 +297,8 @@ def load_sqlite_model_scores(database_path, map={}, include_null=False, is_xl=Fa
             continue
         map[key_with_cfg] = {
             "mean_score": float(np.mean(scores)),
+            "q50_score": float(np.quantile(scores, 0.5)),
+            "q90_score": float(np.quantile(scores, 0.9)),
             "count": int(scores.size),
             "raw_scores": data["scores"],
             "loras": data["loras"],
@@ -316,9 +320,10 @@ def load_dataset_model_scores(
     is_xl=False,
     combine=False,
     normalize=True,
+    target_mode="mean",
 ):
     """Load dataset with model scores instead of binary labels"""
-
+    
     def _get_data(is_xl_flag):
         map_data = {}
         try:
@@ -327,10 +332,10 @@ def load_dataset_model_scores(
         except sqlite3.OperationalError:
             load_sqlite_model_scores(
                 "../dataset/sd.db", map_data, include_null=include_null, is_xl=is_xl_flag)
-
+        
         inputs = []
         scores = []
-
+        
         for key, value in map_data.items():
             if len(value["sequence"].split(",")) <= 82:
                 inputs.append({
@@ -344,8 +349,11 @@ def load_dataset_model_scores(
                     "denoising_strength": value["denoising_strength"],
                     "model_id": 1 if is_xl_flag else 0
                 })
-                scores.append(value["mean_score"])
-
+                if target_mode == "quantiles":
+                    scores.append([value["q50_score"], value["q90_score"]])
+                else:
+                    scores.append(value["mean_score"])
+        
         return inputs, scores
 
     if combine:
@@ -353,42 +361,68 @@ def load_dataset_model_scores(
         print("Loading SD1.5 dataset...")
         inputs_sd15, scores_sd15 = _get_data(False)
         print(f"Loaded {len(scores_sd15)} SD1.5 samples")
-
+        
         print("Loading SDXL dataset...")
         inputs_xl, scores_xl = _get_data(True)
         print(f"Loaded {len(scores_xl)} SDXL samples")
-
+        
         if normalize:
             print("Normalizing scores separately (Z-score)...")
+            # Normalize SD1.5
             s15 = np.array(scores_sd15, dtype=np.float32)
             if len(s15) > 0:
-                mean_15, std_15 = np.mean(s15), np.std(s15)
-                print(f"SD1.5: mean={mean_15:.4f}, std={std_15:.4f}")
-            s15_norm = (s15 - mean_15) / (std_15 + 1e-8)
-            scores_sd15 = s15_norm.tolist()
+                if target_mode == "quantiles":
+                    mean_15 = np.mean(s15, axis=0)
+                    std_15 = np.std(s15, axis=0)
+                    print(
+                        f"SD1.5: mean_q50={mean_15[0]:.4f}, std_q50={std_15[0]:.4f}, "
+                        f"mean_q90={mean_15[1]:.4f}, std_q90={std_15[1]:.4f}"
+                    )
+                else:
+                    mean_15, std_15 = np.mean(s15), np.std(s15)
+                    print(f"SD1.5: mean={mean_15:.4f}, std={std_15:.4f}")
+                s15_norm = (s15 - mean_15) / (std_15 + 1e-8)
+                scores_sd15 = s15_norm.tolist()
 
+            # Normalize SDXL
             sxl = np.array(scores_xl, dtype=np.float32)
             if len(sxl) > 0:
-                mean_xl, std_xl = np.mean(sxl), np.std(sxl)
-                print(f"SDXL: mean={mean_xl:.4f}, std={std_xl:.4f}")
-            sxl_norm = (sxl - mean_xl) / (std_xl + 1e-8)
-            scores_xl = sxl_norm.tolist()
-
+                if target_mode == "quantiles":
+                    mean_xl = np.mean(sxl, axis=0)
+                    std_xl = np.std(sxl, axis=0)
+                    print(
+                        f"SDXL: mean_q50={mean_xl[0]:.4f}, std_q50={std_xl[0]:.4f}, "
+                        f"mean_q90={mean_xl[1]:.4f}, std_q90={std_xl[1]:.4f}"
+                    )
+                else:
+                    mean_xl, std_xl = np.mean(sxl), np.std(sxl)
+                    print(f"SDXL: mean={mean_xl:.4f}, std={std_xl:.4f}")
+                sxl_norm = (sxl - mean_xl) / (std_xl + 1e-8)
+                scores_xl = sxl_norm.tolist()
+        
         dataset_input = inputs_sd15 + inputs_xl
         dataset_output = scores_sd15 + scores_xl
-
+        
     else:
         # Load single dataset
         dataset_input, dataset_output = _get_data(is_xl)
-
+        
         if normalize:
             print(f"Normalizing scores (is_xl={is_xl})...")
             s = np.array(dataset_output, dtype=np.float32)
             if len(s) > 0:
-                mean_val, std_val = np.mean(s), np.std(s)
-                print(f"Stats: mean={mean_val:.4f}, std={std_val:.4f}")
-            s_norm = (s - mean_val) / (std_val + 1e-8)
-            dataset_output = s_norm.tolist()
+                if target_mode == "quantiles":
+                    mean_val = np.mean(s, axis=0)
+                    std_val = np.std(s, axis=0)
+                    print(
+                        f"Stats: mean_q50={mean_val[0]:.4f}, std_q50={std_val[0]:.4f}, "
+                        f"mean_q90={mean_val[1]:.4f}, std_q90={std_val[1]:.4f}"
+                    )
+                else:
+                    mean_val, std_val = np.mean(s), np.std(s)
+                    print(f"Stats: mean={mean_val:.4f}, std={std_val:.4f}")
+                s_norm = (s - mean_val) / (std_val + 1e-8)
+                dataset_output = s_norm.tolist()
 
     print(f"Total samples: {len(dataset_input)}")
     return (dataset_input, dataset_output)
@@ -404,7 +438,12 @@ def split_dataset(dataset_input, dataset_output):
                 index = i
         return index
 
-    y_series = pd.Series(dataset_output)
+    y_np = np.asarray(dataset_output)
+    if y_np.ndim > 1:
+        y_strat = y_np[:, 0]
+    else:
+        y_strat = y_np
+    y_series = pd.Series(y_strat)
 
     # class_counts = y_series.value_counts()
 
@@ -420,7 +459,6 @@ def split_dataset(dataset_input, dataset_output):
         stratify=y_binned,
     )
 
-    y_np = np.asarray(dataset_output)
     y_train = y_np[y_train_idx]
     y_val = y_np[y_val_idx]
 
