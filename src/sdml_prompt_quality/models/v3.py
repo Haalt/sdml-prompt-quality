@@ -49,11 +49,13 @@ class PromptQualityModelV3(nn.Module):
         head_h1: int = 320,
         head_h2: int = 160,
         dropout_p: float = 0.3,
+        output_dim: int = 1,
     ):
         super().__init__()
+        self.output_dim = output_dim
 
         d_m = 32
-        self.d_m = d_m
+        self.d_m = d_m 
 
         # embeddings
         self.token_embed = nn.Embedding(vocab_tokens, d_t, padding_idx=0)
@@ -109,7 +111,7 @@ class PromptQualityModelV3(nn.Module):
             nn.BatchNorm1d(head_h2),
             nn.ReLU(),
             nn.Dropout(dropout_p),
-            nn.Linear(head_h2, 1),
+            nn.Linear(head_h2, output_dim),
         )
 
         # init
@@ -197,8 +199,22 @@ class PromptQualityModelV3(nn.Module):
              cfg_col, n_loras_col, v_dom],
             dim=1
         )                                              # (B, in_dim)
-        logits = self.head(z).squeeze(1)
-        return logits
+        logits = self.head(z)
+        if self.output_dim == 1:
+            return logits.squeeze(1)
+        else:
+            q50 = torch.sigmoid(logits[:, 0])
+            gap_frac = torch.sigmoid(logits[:, 1])
+            q90 = q50 + (1.0 - q50) * gap_frac
+
+            return torch.stack([q50, q90], dim=1)
+
+class PromptQualityModelV3Quantile(PromptQualityModelV3):
+    """V3 variant with two outputs: predicted q50 and q90."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs["output_dim"] = 2
+        super().__init__(*args, **kwargs)
 
 
 def load_model(checkpoint_path):
@@ -225,7 +241,7 @@ def load_model(checkpoint_path):
     max_cfg_scale = 11.0
     max_loras = 7
 
-
+   
     vocab_samplers = 20
     vocab_upscalers = 17
 
@@ -250,4 +266,30 @@ def load_model(checkpoint_path):
     model.load_state_dict(state)
     model.eval()
 
+    return model
+
+
+def load_quantile_model(checkpoint_path):
+    torch.serialization.safe_globals([PromptQualityModelV3Quantile])
+
+    vocab_samplers = 20
+    vocab_upscalers = 17
+    vocab_tokens = 1376
+    vocab_loras = 136
+
+    model = PromptQualityModelV3Quantile(
+        vocab_tokens=vocab_tokens,
+        vocab_loras=vocab_loras,
+        vocab_samplers=vocab_samplers,
+        vocab_upscalers=vocab_upscalers,
+        bucket_size=20,
+        d_t=256,
+        d_L=128,
+        head_h1=512,
+        dropout_p=0.4,
+    )
+
+    state = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(state)
+    model.eval()
     return model
