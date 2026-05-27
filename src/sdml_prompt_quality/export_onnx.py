@@ -5,15 +5,22 @@ import os
 from pathlib import Path
 
 from .models.v3 import load_model
+# from .models.v3_clip_embed import load_model
+# from .models.v6 import load_model
+# from .models.v35 import load_model
+#from .models.v5 import load_model
+# from .models.v4 import load_model
 
 
-def make_dummy(batch=1, T=77, L=7, device="cuda", float_dtype=torch.float32):
+def make_dummy(batch=1, T=77, L=7, device="cuda", float_dtype=torch.float32,
+               clip_embed=False):
     z_long = lambda *shape: torch.zeros(*
                                         shape, dtype=torch.long,  device=device)
     z_float = lambda *shape: torch.zeros(*
                                          shape, dtype=float_dtype, device=device)
 
-    tokens = z_long(batch, T)
+    # clip_embed models use float embeddings; one-hot models use int64 token IDs
+    tokens = z_float(batch, T) if clip_embed else z_long(batch, T)
     token_mask = z_float(batch, T)
 
     lora_ids = z_long(batch, L)
@@ -41,8 +48,10 @@ def make_dummy(batch=1, T=77, L=7, device="cuda", float_dtype=torch.float32):
 
 
 def export_onnx_fp32(out_path, model_path, device="cuda"):
+    # dummy = make_dummy(batch=2, T=768, L=7, device=device,
+    #                    float_dtype=torch.float32, clip_embed=True)
     dummy = make_dummy(batch=2, T=81, L=7, device=device,
-                       float_dtype=torch.float32)
+                       float_dtype=torch.float32, clip_embed=False)
     model = load_model(model_path)
     model.eval().to(device)
 

@@ -83,8 +83,6 @@ def process_sequences(_sequences, tokenizer):
     STEP_BUCKET_WIDTH = 5
 
     labels = []
-    model_ids = []
-
     loras = []
     sequences = []
     sequences_masks = []
@@ -98,14 +96,30 @@ def process_sequences(_sequences, tokenizer):
     upscalers = []
     upscale_steps = []
     denoise_strengths = []
+    model_ids = []
+
+    invlid_cfg_cnt = 0
 
     for _seq in _sequences:
+        if _seq["cfg_scale"] > 11.0:
+            invlid_cfg_cnt += 1
+            continue
+
         seq = _seq["sequence"]
+        loras_present = _seq["loras"]
         w, s, l, s_m = ([], [], [], [])
         n_l = 0
+        error_count = 0
         for token, weight in seq:
             if tokenizer.token_to_text(token).startswith("lora"):
-                # s.append(token)
+                # if tokenizer.token_to_text(token) not in loras_present:
+                #     # print(
+                #     #     f"lora not present: '{tokenizer.token_to_text(token)}'")
+                #     # print(loras_present)
+                #     # print([tokenizer.token_to_text(token) for token, _ in seq])
+                #     # exit()
+                #     error_count += 1
+                #     continue
                 w.append(weight)
                 # l.append(token)
                 l.append(tokenizer.lora_to_token(
@@ -114,6 +128,16 @@ def process_sequences(_sequences, tokenizer):
             else:
                 s.append(token)
                 s_m.append(1)
+
+        if error_count > 0:
+            # skip that prompt
+            pass
+            # continue
+
+        # Filter out samples with empty prompts (no text tokens, only LoRAs or completely empty)
+        if len(s) == 0:
+            print(f"Warning: Skipping sample with empty prompt (only LoRAs or no tokens)")
+            continue
 
         loras.append(l)
         weights.append(w)
@@ -128,14 +152,16 @@ def process_sequences(_sequences, tokenizer):
         upscale_steps.append(_seq["upscaler_steps"] / 25.0)
 
         denoise_strengths.append(_seq["denoising_strength"])
+        model_ids.append(_seq["model_id"])
 
         upscalers.append(tokenizer.upscaler_to_token(_seq["upscaler"]))
-        model_ids.append(_seq["model_id"])
         # keep label aligned with kept sample
         if "label" in _seq:
             labels.append(_seq["label"])
         else:
             raise Exception("no Label")
+        
+    print(f"Skipped {invlid_cfg_cnt} prompts (invalid CFG)")
 
     up_has = [1 if u > 0 else 0 for u in upscalers]
 
@@ -153,8 +179,8 @@ def process_sequences(_sequences, tokenizer):
         upscalers,
         upscale_steps,
         denoise_strengths,
-        model_ids,
         up_has,
+        model_ids,
         labels
     )
 
@@ -215,6 +241,13 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
         print("Saving tokenizer")
         tokenizer.save(tokenizer_file)
 
+    # tokenizer.fit_on_texts(np.concatenate(
+    #         (x_train, x_val), axis=None))
+    # tokenizer.fit_on_loras(np.concatenate(
+    #         (x_train, x_val), axis=None))
+    # tokenizer.save(tokenizer_file)
+
+
     vocab_size = tokenizer.length
     lora_vocab_size = len(tokenizer.lora_index)
     print(vocab_size)
@@ -241,8 +274,8 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
         upscalers,
         upscale_steps,
         denoise_strengths,
-        model_ids,
         up_has,
+        model_ids,
         y_train,
     ) = process_sequences(sequences, tokenizer)
 
@@ -260,10 +293,14 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
         upscalers_val,
         upscale_steps_val,
         denoise_strengths_val,
-        model_ids_val,
         up_has_val,
+        model_ids_val,
         y_val,
     ) = process_sequences(sequences_val, tokenizer)
+
+    # Ensure target arrays are dense float arrays for both scalar and multi-target modes.
+    y_train = np.asarray(y_train, dtype=np.float32)
+    y_val = np.asarray(y_val, dtype=np.float32)
 
     # (
     #     sequences_test,
@@ -314,6 +351,8 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
     for cfg in cfg_scales + cfg_scales_val:  # + cfg_scales_test:
         if cfg > max_cfg_scale:
             max_cfg_scale = cfg
+
+    # max_cfg_scale = 16.5
 
     print(f"max cfg scale: {max_cfg_scale}")
 
@@ -407,11 +446,15 @@ def preprocess(dataset_input, dataset_output, tokenizer_file):
     print("expected vocab size:", vocab_size)
     print("max lora index: ", padded_sequences_loras_train.max())
     print("expected lora vocab size:", lora_vocab_size)
+    print("train samples:", len(train_samples[0]))
+    print("val samples:", len(val_samples[0]))
 
     print(
         max(steps_bucket),      # should be < bucket_size
         max(samplers),          # should be < vocab_samplers
         max(upscalers),         # should be < vocab_upscalers
     )
+
+    # exit()
 
     return (train_samples, val_samples, vocab_size, lora_vocab_size + 1, sampler_vocab_size, upscaler_vocab_size)
