@@ -30,6 +30,7 @@ dependencies = [
   "jsonschema>=4.17.0",
   "transformers>=4.30.0",
   "tokenizers>=0.13.0",
+  "cleanlab>=2.6.0",
 ]
 
 [project.optional-dependencies]

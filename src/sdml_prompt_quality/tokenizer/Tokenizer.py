@@ -150,7 +150,7 @@ class Tokenizer:
                         self.unknown.add(token)
                         raise KeyError
             except KeyError:
-                pass
+                continue
             tmp = {**text}
             tmp['sequence'] = seq
             seqs.append(tmp)

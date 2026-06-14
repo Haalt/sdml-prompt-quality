@@ -5,3 +5,16 @@ __pycache__/
 *.egg-info/
 *.bak
 *.data
+*.pt
+*.onnx
+*.json
+__pycache__/
+*.egg-info/
+*.bak
+*.data
+*.npy
+/*.py
+/*.png
+*.txt
+/reports
+/analysis
